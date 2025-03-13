@@ -127,8 +127,6 @@ Ahora vamos a configurar el AWS cli con las credenciales. Para mas información 
 
 Una vez que tenemos el KEY ID y el ACCESS KEY, lo configuramos de la siguiente manera
 
-![Por seguridad pintamos las keys](attachment:47e2e66b-a338-4d9c-bed9-6a10769c59ab:image.png)
-
 Por seguridad pintamos las keys
 
 Una vez que tenemos configurado el AWS cli podemos verificar con el siguiente comando
