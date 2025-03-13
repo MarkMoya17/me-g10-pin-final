@@ -47,9 +47,6 @@
     sudo ./aws/install
     ```
     
-    al finalizar se debería ver lo siguiente
-    
-    ![image.png](attachment:b89111d4-1266-4459-b19f-936d01d842ea:image.png)
     
     Y para verificar ejecutamos
     
@@ -57,9 +54,6 @@
     aws --version
     ```
     
-    Debería imprimir los siguiente
-    
-    ![image.png](attachment:40c2aa43-47de-4dcc-ad43-ca662b699298:image.png)
     
 - Kubectl
     
@@ -78,9 +72,6 @@
     kubectl version --client
     ```
     
-    Debería imprimir lo siguiente
-    
-    ![image.png](attachment:60e7763f-616c-484b-bffe-623b00a6ece6:image.png)
     
 - eksctl
     
@@ -107,9 +98,6 @@
     eksctl info
     ```
     
-    Debería imprimir lo siguiente
-    
-    ![image.png](attachment:1443940c-e4fb-4880-adbb-91285556572d:image.png)
     
 - Helm
     
@@ -129,9 +117,6 @@
     helm version
     ```
     
-    Debería imprimir lo siguiente
-    
-    ![image.png](attachment:5a5d7f7b-74ce-4dcb-85d5-4939befc2851:image.png)
     
 
 ### Configurar AWS
@@ -152,10 +137,6 @@ Una vez que tenemos configurado el AWS cli podemos verificar con el siguiente co
 aws sts get-caller-identity
 ```
 
-Debería imprimir
-
-![image.png](attachment:ef80c8bf-e8c4-410a-ae64-10e79e9afcd7:image.png)
-
 Con esto tenemos todo configurado para continuar
 
 ---
@@ -172,9 +153,8 @@ Se ejecuto lo siguiente
 mkdir $HOME/eks && cd $HOME/eks && ssh-keygen -t rsa -b 4096 -C "eks-ssh" -f ./eks-ssh -N ""
 ```
 
-Una ves finalizado debería imprimir los siguiente y con **`ls`** verificamos que este
+Con **`ls`** verificamos que este creada la key
 
-![image.png](attachment:2159b2b3-81dd-40b6-add9-a2f99bda292f:image.png)
 
 ### Iniciar Cluster
 
@@ -194,15 +174,8 @@ eksctl create cluster \
 --zones us-east-1a,us-east-1b,us-east-1c
 ```
 
-Si todo esta correcto deberíamos tener lo siguiente a la espera que se termine de ejecutar la creación. 
-
-![Esto podría tardar entre 15m-40m](attachment:7a692eab-51b3-4fcb-a0cc-9ef94ebaebb0:image.png)
-
 Esto podría tardar entre 15m-40m
 
-Una vez finalizado deberíamos ver lo siguiente
-
-![Con `kubectl get nodes` podemos ver los nodos disponibles](attachment:df096a14-c626-409c-aea1-1bbd692cbcb8:image.png)
 
 Con `kubectl get nodes` podemos ver los nodos disponibles
 
@@ -273,6 +246,211 @@ kubectl get svc -n default
 
 Vamos a tener dos entramos al EXTERNAL-IP de nginx
 
-![image.png](attachment:8f530b7e-4588-4bf8-b5f2-777c012a392b:image.png)
-
 accedemos y listo ya tenemos nginx
+
+
+### Prometheus
+
+Para levantar Prometheus primero vamos a configurar el storage EBS
+
+Primero instalamos el driver con el siguiente comando
+
+```bash
+kubectl apply -k "github.com/kubernetes-sigs/aws-ebs-csi-driver/deploy/kubernetes/overlays/stable/?ref=release-1.30"
+```
+
+Ahora verificamos con el siguiente comando
+
+```bash
+kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-ebs-csi-driver
+```
+
+Una vez que tenemos los driver ahora configuramos los permisos con el siguiente comando
+
+```bash
+eksctl create iamserviceaccount \
+--name ebs-csi-controller-sa \
+--namespace kube-system \
+--cluster eks-tp-m \
+--attach-policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy \
+--approve \
+--role-only \
+--role-name AmazonEKS_EBS_CSI_DriverRole
+```
+
+Para habilitar el uso del EBS, seguimos las recomendaciones incluidas al final del PIN indicado
+
+```bash
+eksctl create addon \
+--name aws-ebs-csi-driver \
+--cluster eks-tp-m \
+--service-account-role-arn arn:aws:iam::$(**aws sts get-caller-identity --query Account --output text**):role/AmazonEKS_EBS_CSI_DriverRole --force
+```
+
+Ahora que tenemos el EBS configurado vamos a levantar el Prometheus
+
+primero creamos el namespace con el siguiente comando
+
+```bash
+kubectl create namespace prometheus
+```
+
+Agregamos los repositorios con el siguiente comando
+
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+```
+
+Ahora implementamos Prometheus con el siguiente comando
+
+```bash
+helm upgrade -i prometheus prometheus-community/prometheus \
+    --namespace prometheus \
+    --set alertmanager.persistence.storageClass="gp2" \
+    --set server.persistentVolume.storageClass="gp2"
+```
+
+Ahora verificamos que todos los pods este `Running`con el siguiente comando
+
+```bash
+kubectl get pods -n prometheus
+```
+
+Ahora para acceder usamos `kubectl` para el enrutamiento del puerto con el siguiente comando
+
+```bash
+kubectl --namespace=prometheus port-forward deploy/prometheus-server 9090
+```
+
+Ahora accedemos desde [http://localhost:9090](http://localhost:9090/query)
+
+Listo tenemos Prometheus
+
+### Grafana
+
+Primero vamos a crear un namespace para Grafana con el comando:
+
+```bash
+kubectl create namespace grafana
+```
+
+Ahora dentro de `$HOME/eks` creamos una carpeta para las confs de Grafana
+
+```bash
+mkdir ${HOME}/eks/grafana
+```
+
+Ahora dentro de `$HOME/eks/grafana` creamos el archivo `grafana.yaml` con los siguientes datos
+
+```yaml
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+    - name: Prometheus
+      type: prometheus
+      url: http://prometheus-server.prometheus.svc.cluster.local
+      access: proxy
+      isDefault: true
+
+```
+
+Ahora agregamos el repo de Grafana 
+
+```bash
+helm repo add grafana https://grafana.github.io/helm-charts
+```
+
+Ahora desplegamos `grafana` con helm con el siguiente comando
+
+```bash
+helm install grafana grafana/grafana \
+    --namespace grafana \
+    --set persistence.storageClassName="gp2" \
+    --set persistence.enabled=true \
+    --set adminPassword='PASSWD' \
+    --values ${HOME}/eks/grafana/grafana.yaml \
+    --set service.type=LoadBalancer
+```
+
+ahora con el siguiente comando verificamos que este correctamente levantado
+
+```bash
+kubectl get pods -n grafana
+```
+
+Buscamos el DNS del ELB para acceder con el siguiente comando
+
+```yaml
+kubectl get svc -n grafana
+```
+
+
+Ahora accedemos a Grafana 
+![usamos PASSWD como password declarado]
+
+usamos PASSWD como password declarado
+
+Ahora vamos a `dashboard`
+
+Ahora desde `New` importamos el dashboard
+Usamos el ID `3119`
+Hacemos click en `Load` 
+Ahora en la última opción ponemos Prometheus y hacemos click en `Import`
+Vamos a ver el Dashboard
+
+De igual forma importamos el dashboard con ID  `6417` y le damos en `Load`
+Luego seleccionamos Prometheus:
+Y vamos a ver el segundo dashboard
+
+
+## Clean Up
+
+Después de tener todo funcionando correctamente, eliminaremos los recursos creados.
+
+### **Eliminar Addons y Roles IAM Relacionados al CSI Driver de EBS**
+
+Primero, se debe eliminar el addon del controlador CSI de EBS y el role IAM que se crearon:
+
+```bash
+eksctl delete addon --name aws-ebs-csi-driver --cluster eks-tp-m
+eksctl delete iamserviceaccount --name ebs-csi-controller-sa --namespace kube-system --cluster eks-tp-m –wait
+```
+
+
+### **Eliminar las instalaciones de Helm**
+
+Se debe desinstalar las instalaciones de Helm antes de eliminar el cluster de EKS. Esto asegurará que todos los recursos creados por Helm se eliminen correctamente.
+
+```bash
+helm uninstall grafana -n grafana
+helm uninstall prometheus -n prometheus
+```
+
+
+### **Eliminar Namespaces**
+
+Se tienen que eliminar los namespaces de Prometheus y Grafana mediante los siguientes comandos:
+
+```bash
+kubectl delete namespace grafana
+kubectl delete namespace prometheus
+```
+
+### **Eliminar la Aplicación Nginx**
+
+Elimina la aplicación Nginx que desplegaste:
+
+```bash
+kubectl delete -f nginx.yml
+```
+
+### **Eliminar el Cluster de EKS**
+
+Ahora, por último, se debe eliminar el cluster de EKS. Este proceso puede tomar algún tiempo:
+
+```bash
+eksctl delete cluster --name eks-tp-m --region us-east-1
+```
+
+
